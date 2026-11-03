@@ -1,102 +1,81 @@
 # DEX-AI — Agentic Text-to-SQL Application
 
-A production-ready **Natural Language → MySQL** pipeline powered by the **Groq API** (free tier) and `meta-llama/llama-4-scout-17b-16e-instruct`.
+A production-ready **Natural Language → MySQL** pipeline powered by **Groq LPU Acceleration** and modern LLM models (`openai/gpt-oss-120b` / `meta-llama/llama-4-scout-17b-16e-instruct`).
+
+Featuring a high-performance **FastAPI backend** and a clean, modern **React + Vite dark-theme frontend**.
 
 ---
 
-## Architecture
+## Architecture Overview
 
 ```
-User Question
-     │
-     ▼
-┌──────────────────────────┐
-│   sql_generator.py       │  ← Groq LLM (Llama 4 Scout, free tier)
-│   (agents/)              │    + retry / exponential back-off
-│   • prompt engineering   │    + read-only enforcement
-│   • SQL safety checks    │    + sqlglot syntax validation
-└────────────┬─────────────┘
-             │  validated SELECT
-             ▼
-┌──────────────────────────┐
-│   query_executor.py      │  ← SQLAlchemy + MySQL
-│   (service/)             │    + secondary read-only guard
-│   • safe execution       │    + serialisable output
-└──────────────────────────┘
-             │  rows / error
-             ▼
-         Response
+ ┌─────────────────────────────────────────────────────────────┐
+ │                React + Vite Frontend (UI)                   │
+ │  • Active Model Telemetry     • Natural Language Composer   │
+ │  • SQL Syntax Highlighter     • Interactive Results Table   │
+ │  • Live Schema Explorer       • CSV Export & History        │
+ └──────────────────────────────┬──────────────────────────────┘
+                                │ HTTP / JSON (REST API)
+                                ▼
+ ┌─────────────────────────────────────────────────────────────┐
+ │                 FastAPI Backend (app.py)                    │
+ │   POST /api/query   •   GET /api/schema   • GET /api/health │
+ └──────────────┬──────────────────────────────┬───────────────┘
+                │                              │
+                ▼                              ▼
+ ┌─────────────────────────────┐  ┌────────────────────────────┐
+ │  Groq LLM (Text-to-SQL)     │  │  MySQL Database Executor   │
+ │  • LPU ultra-low latency    │  │  • SQLAlchemy Connection   │
+ │  • Exponential Backoff      │  │  • Read-only SELECT Guard  │
+ │  • SQL Syntax Validation    │  │  • Data Serialization      │
+ └─────────────────────────────┘  └────────────────────────────┘
 ```
 
 ---
 
-## Free LLM Provider Comparison
+## Features
 
-| Provider | Model | Free Tier | Context | Tool Calling | SQL Quality |
-|----------|-------|-----------|---------|--------------|-------------|
-| **Groq** ✅ | `meta-llama/llama-4-scout-17b-16e-instruct` | ✅ Yes (no CC) | 128 K | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Groq | `llama-3.1-8b-instant` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐ |
-| Groq | `openai/gpt-oss-120b` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Google Gemini | `gemini-2.0-flash` | ✅ Yes (AI Studio) | 1 M | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Cerebras | `llama-3.3-70b` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐ |
-| SambaNova | `Meta-Llama-3.1-405B` | ✅ Yes | 16 K | ⚠️ Partial | ⭐⭐⭐ |
-| NVIDIA NIM | various | ✅ 1 K credits | varies | ✅ Yes | ⭐⭐⭐⭐ |
-| OpenRouter | various | ✅ \$1 free credits | varies | ✅ Yes | varies |
-| Hugging Face | serverless inference | ✅ Limited | varies | ⚠️ Model-dependent | ⭐⭐⭐ |
-
-> **Selected: Groq + Llama 4 Scout** — best combination of free access, speed (LPU), tool-calling, and SQL accuracy.
+- **Dynamic Model Telemetry**: Automatically displays the active Groq model (e.g. `openai/gpt-oss-120b` or `meta-llama/llama-4-scout-17b-16e-instruct`), MySQL database connection status, and read-only mode guarantee.
+- **Natural Language Querying**: Asks questions in plain English and receives accurate MySQL queries and formatted results in seconds.
+- **SQL Inspector**: Syntax-highlighted SQL block with one-click copy and security badges (`Read-Only Verified`, `MySQL 8.0`).
+- **Interactive Results Table**: Displays columns and rows returned from MySQL, row count, search filter, and instant **Export to CSV**.
+- **Live Database Schema Explorer**: Slide-out drawer to inspect tables (`employees`, `departments`, `salaries`, `sales`), column data types, primary keys, and foreign keys.
+- **Query History & Curated Samples**: Click-to-ask sample questions or re-run prior queries from history.
 
 ---
 
-## Why `llama-3.3-70b-versatile` Stopped Working
+## Quick Start Guide
 
-Groq deprecated `llama-3.3-70b-versatile` on the free developer tier, effective **16 August 2026**.  
-Any request to that model ID now returns:
-
-```
-Error code: 404 — model_not_found
-```
-
-**Fix:** Update `GROQ_MODEL` in `.env` to a currently active model.
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-- Python 3.10+
-- MySQL 8.0 running locally
-- Groq API key (free at [console.groq.com](https://console.groq.com))
-
-### 2. Clone & Set Up
-
-```bash
-git clone https://github.com/IrfanHussain1132/DEX-AI.git
-cd DEX-AI/backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 3. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env with your MySQL credentials and Groq API key
-```
-
-### 4. Run
+### 1. Backend Setup
 
 ```bash
 cd backend
-python main.py
+
+# Activate virtual environment (Windows)
+..\venv\Scripts\activate
+
+# Install backend dependencies
+pip install -r requirements.txt
+
+# Start FastAPI server on port 8000
+python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+The API will be available at `http://localhost:8000` (API documentation at `http://localhost:8000/docs`).
+
+### 2. Frontend Setup
+
+In a separate terminal:
+
+```bash
+# In the project root directory
+npm install
+
+# Start Vite dev server
+npm run dev
+```
+
+Open `http://localhost:5173` in your browser.
 
 ---
 
@@ -104,58 +83,50 @@ python main.py
 
 ```
 DEX/
-└── backend/
-    ├── agents/
-    │   ├── __init__.py
-    │   └── sql_generator.py      ← LLM integration (Groq, retries, safety)
-    ├── service/
-    │   ├── __init__.py
-    │   └── query_executor.py     ← Safe MySQL execution layer
-    ├── connection.py             ← SQLAlchemy engine
-    ├── schema.py                 ← Dynamic schema introspection
-    ├── main.py                   ← App entry point + acceptance tests
-    ├── test_connection.py        ← DB connectivity test
-    ├── test_sql_generation.py    ← SQL generation smoke tests
-    ├── requirements.txt
-    ├── .env.example
-    └── .gitignore
+├── backend/
+│   ├── agents/
+│   │   ├── __init__.py
+│   │   └── sql_generator.py      ← Groq LLM integration, retries, safety checks
+│   ├── service/
+│   │   ├── __init__.py
+│   │   └── query_executor.py     ← Safe MySQL execution layer
+│   ├── app.py                    ← FastAPI HTTP server (endpoints for UI)
+│   ├── connection.py             ← SQLAlchemy engine & connection pool
+│   ├── schema.py                 ← Live database schema introspection
+│   ├── main.py                   ← CLI test runner & acceptance tests
+│   ├── test_connection.py        ← DB connectivity test
+│   ├── requirements.txt          ← Python dependencies
+│   ├── .env                      ← Private environment variables (ignored by Git)
+│   └── .env.example              ← Template configuration
+├── src/
+│   ├── services/
+│   │   └── api.js                ← Axios client connecting to backend API
+│   ├── App.jsx                   ← Main Text-to-SQL React UI
+│   ├── main.jsx                  ← Application entry point
+│   └── styles.css                ← Dark-theme modern styling
+├── index.html                    ← HTML shell
+├── package.json                  ← Frontend dependencies (React, Vite, Lucide)
+├── FRONTEND.md                   ← Frontend documentation
+└── README.md                     ← Main documentation
 ```
 
 ---
 
-## Security Features
+## Security Guarantees
 
 | Feature | Implementation |
-|---------|---------------|
-| Read-only enforcement | Regex guard + `SELECT`-only check in both generator and executor |
-| SQL injection protection | No string interpolation; SQLAlchemy `text()` with parameterisation |
-| Syntax validation | `sqlglot` parse check before execution |
-| API key security | Environment variables only — never hardcoded |
-| Rate-limit handling | `tenacity` exponential back-off (2 s → 4 s → 8 s → 60 s) |
+|---------|----------------|
+| **Read-Only Enforcement** | Regex keyword guard + strict `SELECT`-only check in both generator and executor |
+| **SQL Injection Protection** | No raw string interpolation; SQLAlchemy `text()` with parameterisation |
+| **Syntax Validation** | `sqlglot` parse check before execution |
+| **Rate-Limit Resilience** | `tenacity` exponential back-off (2 s → 4 s → 8 s → 60 s) |
+| **API Key Protection** | Environment variables only — never committed or leaked to client |
 
 ---
 
-## Environment Variables
+## API Endpoints
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GROQ_API_KEY` | Groq API key | **required** |
-| `GROQ_MODEL` | Model ID | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `MYSQL_HOST` | MySQL host | `localhost` |
-| `MYSQL_PORT` | MySQL port | `3306` |
-| `MYSQL_USER` | MySQL user | — |
-| `MYSQL_PASSWORD` | MySQL password | — |
-| `MYSQL_DATABASE` | Database name | — |
-
----
-
-## Phase 4 Test Queries
-
-| # | Natural Language | Expected |
-|---|-----------------|----------|
-| 1 | Show all employees | SELECT * FROM employees |
-| 2 | Average salary per department | GROUP BY + AVG |
-| 3 | Department with highest avg salary | ORDER BY + LIMIT 1 |
-| 4 | Employees earning > 50 000 | WHERE salary > 50000 |
-| 5 | Count employees per department | COUNT + GROUP BY |
-| 6 | Top 5 highest-paid employees | ORDER BY salary DESC LIMIT 5 |
+- `POST /api/query`: Accepts `{ "question": "..." }` and returns `{ "success": true, "sql": "...", "columns": [...], "rows": [...], "count": N, "execution_time_ms": M }`
+- `GET /api/schema`: Returns introspected database tables, columns, constraints, and foreign keys.
+- `GET /api/health`: Returns service health status, MySQL connection, and active Groq model name.
+- `GET /api/sample-queries`: Returns suggested queries organized by category.

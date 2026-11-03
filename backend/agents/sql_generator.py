@@ -30,9 +30,14 @@ except ImportError:
     SQLGLOT_AVAILABLE = False
 
 try:
-    from .schema import get_database_schema          # package import
+    from ..schema import get_database_schema         # package import: backend.agents → backend.schema
 except ImportError:
-    from schema import get_database_schema           # direct / __main__ import
+    try:
+        from schema import get_database_schema       # run directly: python agents/sql_generator.py
+    except ImportError:
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        from schema import get_database_schema       # last-resort fallback
 
 # ─────────────────────────── Logging ──────────────────────────────────────────
 logging.basicConfig(
@@ -45,7 +50,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 API_KEY = os.getenv("GROQ_API_KEY")
-MODEL   = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+MODEL   = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 if not API_KEY:
     raise ValueError(

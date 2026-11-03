@@ -116,3 +116,4 @@ def execute_query(sql: str) -> dict:
 if __name__ == "__main__":
     result = execute_query("SELECT DATABASE()")
     print(result)
+
