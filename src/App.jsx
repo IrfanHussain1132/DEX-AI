@@ -1,720 +1,419 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Database,
-  Sparkles,
-  Send,
-  Copy,
-  Check,
-  Clock,
-  Table,
-  Download,
-  Search,
-  RefreshCw,
-  AlertCircle,
-  ShieldCheck,
-  ChevronRight,
-  ChevronDown,
-  Layers,
-  Terminal,
-  Zap,
-  Cpu,
-  CheckCircle2,
-  XCircle,
-  HelpCircle,
-  RotateCcw
+  Activity, ArrowRight, ArrowUp, BarChart3, Check, ChevronDown,
+  CircleHelp, Clock3, Copy, Database, FileText, LoaderCircle,
+  Menu, MessageSquare, MoreHorizontal, Paperclip, Plus, Settings2,
+  ShieldCheck, Sparkles, Table2, UploadCloud, Wifi, WifiOff, X, Zap,
 } from 'lucide-react';
-import {
-  askDatabase,
-  fetchSchema,
-  fetchHealth,
-  fetchSampleQueries,
-  readableApiError
-} from './services/api';
+import { askDatabase, askDocument, readableApiError, uploadDocument } from './services/api';
 
-// Syntax highlighter helper for SQL keywords
-function highlightSql(sql) {
-  if (!sql) return null;
-  const tokens = sql.split(
-    /(\b(?:SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|LEFT JOIN|RIGHT JOIN|INNER JOIN|OUTER JOIN|ON|AS|AND|OR|NOT|IN|LIKE|BETWEEN|IS|NULL|DESC|ASC|COUNT|AVG|SUM|MIN|MAX|DISTINCT|HAVING|CASE|WHEN|THEN|ELSE|END)\b|\b\d+(?:\.\d+)?\b|'[^']*')/gi
+/* ── Suggestion cards ───────────────────────────────────────────────────── */
+const suggestions = [
+  { icon: BarChart3,  title: 'Average salary by department',  prompt: 'Show average salary by department.' },
+  { icon: Activity,   title: 'Top 5 highest-paid employees',  prompt: 'Find the top 5 highest-paid employees.' },
+  { icon: Database,   title: 'Count employees per department', prompt: 'Count employees in each department.' },
+];
+
+/* ── Response field helpers ─────────────────────────────────────────────── */
+function getSql(r)         { return r?.sql || r?.query || r?.generated_sql || r?.data?.sql || ''; }
+function getRows(r)        { return r?.rows || r?.results || r?.data?.rows || []; }
+function getColumns(r, rows){ return r?.columns || r?.data?.columns || (rows[0] ? Object.keys(rows[0]) : []); }
+function getError(r)       { return r?.error || r?.detail || r?.message || r?.data?.error; }
+function getTime(r)        { return r?.execution_time ?? r?.executionTime ?? r?.duration_ms; }
+
+/* ── SQL syntax highlighter ─────────────────────────────────────────────── */
+const SQL_KW = /\b(SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|LEFT JOIN|RIGHT JOIN|INNER JOIN|ON|AS|AND|OR|DESC|ASC|COUNT|AVG|SUM|MIN|MAX|DISTINCT|HAVING)\b/gi;
+
+function SqlBlock({ sql }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(sql); setCopied(true); setTimeout(() => setCopied(false), 1600); } catch {}
+  }
+  const parts = sql.split(/((?:\b(?:SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|LEFT JOIN|RIGHT JOIN|INNER JOIN|ON|AS|AND|OR|DESC|ASC|COUNT|AVG|SUM|MIN|MAX|DISTINCT|HAVING)\b)|\b\d+(?:\.\d+)?\b|'[^']*')/gi);
+  return (
+    <div className="sql-card">
+      <div className="sql-head">
+        <div>
+          <span className="sql-dot"/>
+          <span>Generated SQL</span>
+          <span className="readonly"><ShieldCheck size={12}/> Read only</span>
+        </div>
+        <button className="copy-btn" onClick={copy}>
+          {copied ? <Check size={14}/> : <Copy size={14}/>} {copied ? 'Copied' : 'Copy SQL'}
+        </button>
+      </div>
+      <pre><code>
+        {parts.map((p, i) =>
+          SQL_KW.test(p)         ? <span className="sql-key"   key={i}>{p}</span>
+          : /^\d/.test(p) || /^'/.test(p) ? <span className="sql-value" key={i}>{p}</span>
+          : p
+        )}
+      </code></pre>
+    </div>
   );
-
-  return tokens.map((part, index) => {
-    if (!part) return null;
-    const isKeyword = /^(SELECT|FROM|WHERE|GROUP BY|ORDER BY|LIMIT|JOIN|LEFT JOIN|RIGHT JOIN|INNER JOIN|OUTER JOIN|ON|AS|AND|OR|NOT|IN|LIKE|BETWEEN|IS|NULL|DESC|ASC|COUNT|AVG|SUM|MIN|MAX|DISTINCT|HAVING|CASE|WHEN|THEN|ELSE|END)$/i.test(part);
-    const isLiteral = /^\d/.test(part) || /^'/.test(part);
-
-    if (isKeyword) {
-      return <span key={index} className="sql-keyword">{part}</span>;
-    }
-    if (isLiteral) {
-      return <span key={index} className="sql-literal">{part}</span>;
-    }
-    return <span key={index}>{part}</span>;
-  });
 }
 
-// Download CSV utility
-function downloadCsv(columns, rows, filename = 'query_results.csv') {
-  if (!rows || rows.length === 0) return;
-  const header = columns.join(',');
-  const lines = rows.map((row) =>
-    columns
-      .map((col) => {
-        let val = row[col];
-        if (val === null || val === undefined) return '""';
-        val = String(val).replace(/"/g, '""');
-        return `"${val}"`;
-      })
-      .join(',')
+/* ── Results table ──────────────────────────────────────────────────────── */
+function ResultsTable({ rows, columns, count }) {
+  if (!rows.length)
+    return <div className="empty-result"><Table2 size={18}/><span>Query completed — no matching records.</span></div>;
+  return (
+    <div className="results-wrap">
+      <div className="table-caption">
+        <span><Table2 size={14}/> Results</span>
+        <span>{count ?? rows.length} records</span>
+      </div>
+      <div className="table-scroll">
+        <table>
+          <thead><tr>{columns.map(c => <th key={c}>{c}</th>)}</tr></thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i}>
+                {columns.map(c => (
+                  <td key={c}>
+                    {row?.[c] == null
+                      ? <span className="null-value">—</span>
+                      : typeof row[c] === 'object' ? JSON.stringify(row[c]) : String(row[c])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
-  const csvContent = 'data:text/csv;charset=utf-8,' + [header, ...lines].join('\n');
-  const encodedUri = encodeURI(csvContent);
-  const link = document.createElement('a');
-  link.setAttribute('href', encodedUri);
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
 }
 
-export default function App() {
-  const [health, setHealth] = useState({
-    status: 'checking',
-    database_connected: false,
-    database_name: 'company_analytics',
-    model: 'Loading...',
-    provider: 'Groq LPU',
-  });
-  const [schema, setSchema] = useState({});
-  const [sampleCategories, setSampleCategories] = useState([]);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [showSchemaDrawer, setShowSchemaDrawer] = useState(false);
-  const [selectedTable, setSelectedTable] = useState(null);
-  const [tableSearch, setTableSearch] = useState({});
-  const [copiedId, setCopiedId] = useState(null);
-
-  const messagesEndRef = useRef(null);
-  const textareaRef = useRef(null);
-
-  // Load initial backend health, database schema, and sample questions
-  useEffect(() => {
-    checkHealthAndSchema();
-  }, []);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  async function checkHealthAndSchema() {
-    try {
-      const healthData = await fetchHealth();
-      setHealth(healthData);
-    } catch {
-      setHealth((prev) => ({
-        ...prev,
-        status: 'offline',
-        database_connected: false,
-      }));
-    }
-
-    try {
-      const schemaData = await fetchSchema();
-      if (schemaData.success) {
-        setSchema(schemaData.schema || {});
-        const tableNames = Object.keys(schemaData.schema || {});
-        if (tableNames.length > 0) setSelectedTable(tableNames[0]);
-      }
-    } catch {
-      // Schema endpoint might be pending or DB down
-    }
-
-    try {
-      const samples = await fetchSampleQueries();
-      if (samples?.categories) {
-        setSampleCategories(samples.categories);
-      }
-    } catch {
-      // Default fallbacks
-      setSampleCategories([
-        {
-          category: 'Employees & Salaries',
-          questions: [
-            'Show all employees.',
-            'Show the average salary of each department.',
-            'Find the department with the highest average salary.',
-            'Show employees earning more than 50000.',
-            'Count employees in each department.',
-            'Find the top 5 highest-paid employees.',
-          ],
-        },
-      ]);
-    }
-  }
-
-  async function handleSend(queryText = input) {
-    const text = (queryText || '').trim();
-    if (!text || loading) return;
-
-    const messageId = Date.now().toString();
-    const newMsg = {
-      id: messageId,
-      question: text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      pending: true,
-      result: null,
-      error: null,
-    };
-
-    setMessages((prev) => [...prev, newMsg]);
-    setInput('');
-    setLoading(true);
-
-    try {
-      const response = await askDatabase(text);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                pending: false,
-                result: response,
-                error: response.success ? null : response.error,
-              }
-            : m
-        )
-      );
-    } catch (err) {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === messageId
-            ? {
-                ...m,
-                pending: false,
-                error: readableApiError(err),
-              }
-            : m
-        )
-      );
-    } finally {
-      setLoading(false);
-      setTimeout(() => textareaRef.current?.focus(), 50);
-    }
-  }
-
-  function handleKeyDown(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }
-
-  function copyToClipboard(text, id) {
-    navigator.clipboard.writeText(text);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 2000);
-  }
-
-  function handleClearChat() {
-    setMessages([]);
-    setInput('');
-  }
-
-  const tableNames = Object.keys(schema);
+/* ── Answer renderer ────────────────────────────────────────────────────── */
+function Answer({ message }) {
+  const result  = message.result || {};
+  const rows    = getRows(result);
+  const columns = getColumns(result, rows);
+  const sql     = getSql(result);
+  const error   = message.error || (!result.success && getError(result));
+  const ms      = getTime(result);
 
   return (
-    <div className="dex-layout">
-      {/* ── Left Navigation / Sidebar ────────────────────────────── */}
-      <aside className="dex-sidebar">
-        <div className="sidebar-header">
-          <div className="brand-logo">
-            <div className="logo-badge">
-              <Zap size={18} className="logo-icon" />
-            </div>
-            <div>
-              <h1 className="brand-title">DEX <span>AI</span></h1>
-              <span className="brand-tagline">Text-to-SQL Agent</span>
-            </div>
+    <div className="answer-content">
+      {error
+        ? <div className="response-error"><CircleHelp size={16}/><span>{error}</span></div>
+        : <>
+            {(result.answer || result.response || result.data?.answer) &&
+              <p className="answer-text">{result.answer || result.response || result.data?.answer}</p>}
+            {sql && <SqlBlock sql={sql}/>}
+            {sql && (
+              <div className="query-meta">
+                <span><span className="status-dot"/> Query executed</span>
+                {ms != null && <span><Clock3 size={13}/>{typeof ms === 'number' ? `${ms} ms` : ms}</span>}
+              </div>
+            )}
+            {Array.isArray(rows) && (sql || rows.length > 0) &&
+              <ResultsTable rows={rows} columns={columns} count={result.count ?? result.total ?? rows.length}/>}
+            {!sql && !rows.length && !(result.answer || result.response || result.data?.answer) &&
+              <p className="answer-text">The request completed, but the API returned no data to display.</p>}
+          </>}
+    </div>
+  );
+}
+
+/* ── DB Status badge (polls /api/health on mount) ───────────────────────── */
+function DbStatus() {
+  const [status, setStatus] = useState('checking'); // 'checking' | 'ok' | 'error'
+  const [info, setInfo]     = useState(null);
+
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+    fetch(`${base}/api/health`)
+      .then(r => r.json())
+      .then(d => { setStatus(d.database?.connected ? 'ok' : 'error'); setInfo(d); })
+      .catch(() => setStatus('error'));
+  }, []);
+
+  if (status === 'checking') return <span style={{display:'flex',alignItems:'center',gap:6,fontSize:9}}><LoaderCircle size={12} className="spin"/> Connecting…</span>;
+  if (status === 'error')    return <span style={{display:'flex',alignItems:'center',gap:6,fontSize:9,color:'#ff7272'}}><WifiOff size={12}/> DB offline</span>;
+  return (
+    <span style={{display:'flex',alignItems:'center',gap:6,fontSize:9,color:'#57d29a'}}>
+      <Wifi size={12}/> {info?.database?.name || 'MySQL'} · {info?.database?.table_count ?? '?'} tables
+    </span>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   App
+═══════════════════════════════════════════════════════════════════════════ */
+export default function App() {
+  const [messages,    setMessages]    = useState([]);
+  const [input,       setInput]       = useState('');
+  const [busy,        setBusy]        = useState(false);
+  const [mode,        setMode]        = useState('database');
+  const [documents,   setDocuments]   = useState([]);
+  const [dragging,    setDragging]    = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeDoc,   setActiveDoc]   = useState(null);
+  const fileInput = useRef(null);
+  const bottomRef = useRef(null);
+
+  /* Auto-scroll to latest message */
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  function newChat() {
+    setMessages([]); setInput(''); setMode('database');
+    setActiveDoc(null); setSidebarOpen(false);
+  }
+
+  async function submit(question = input, selectedMode = mode) {
+    const text = question.trim();
+    if (!text || busy) return;
+    const id = `${Date.now()}-${Math.random()}`;
+    setMessages(prev => [...prev, { id, question: text, mode: selectedMode, pending: true }]);
+    setInput('');
+    setBusy(true);
+    try {
+      const result = selectedMode === 'documents'
+        ? await askDocument(text, activeDoc?.id || activeDoc?.document_id || activeDoc?.name)
+        : await askDatabase(text);
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, pending: false, result } : m));
+    } catch (error) {
+      setMessages(prev => prev.map(m => m.id === id ? { ...m, pending: false, error: readableApiError(error) } : m));
+    } finally { setBusy(false); }
+  }
+
+  async function addFiles(files) {
+    for (const file of Array.from(files || [])) {
+      if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) continue;
+      const entry = { name: file.name, status: 'Uploading', id: `${Date.now()}-${file.name}` };
+      setDocuments(prev => [entry, ...prev]);
+      try {
+        const data = await uploadDocument(file);
+        const doc  = { ...data, id: data.id || data.document_id || entry.id, name: data.filename || data.name || file.name, status: 'Ready' };
+        setDocuments(prev => prev.map(m => m.id === entry.id ? doc : m));
+        setActiveDoc(doc);
+      } catch (error) {
+        setDocuments(prev => prev.map(m => m.id === entry.id ? { ...m, status: 'Failed', error: readableApiError(error) } : m));
+      }
+    }
+  }
+
+  /* ── Shared composer ────────────────────────────────────────────────────── */
+  function Composer({ mini = false }) {
+    return (
+      <div className="composer" style={mini ? { marginTop: 'auto' } : {}}>
+        <textarea
+          rows={mini ? 1 : 2}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          placeholder={mode === 'documents' ? (mini ? 'Ask a follow-up…' : 'Ask about your documents…') : (mini ? 'Ask a follow-up…' : 'Ask anything about your data…')}
+          style={mini ? { minHeight: 48, maxHeight: 150, paddingTop: 14 } : {}}
+        />
+        <div className="composer-footer">
+          <button className="attach-btn" onClick={() => fileInput.current?.click()} title="Upload PDF">
+            <Paperclip size={mini ? 15 : 16}/><span>Attach</span>
+          </button>
+          <div className="composer-right">
+            <span className="mode-chip">
+              <Database size={13}/>{mode === 'database' ? 'Database' : activeDoc?.name || 'Documents'}
+            </span>
+            <button
+              className="send-button"
+              disabled={!input.trim() || busy}
+              onClick={() => submit()}
+              aria-label="Send question"
+            >
+              {busy ? <LoaderCircle size={17} className="spin"/> : <ArrowUp size={18}/>}
+            </button>
           </div>
-          <button
-            className="action-icon-btn"
-            title="Refresh Schema & Health"
-            onClick={checkHealthAndSchema}
-          >
-            <RefreshCw size={14} />
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Render ─────────────────────────────────────────────────────────────── */
+  return (
+    <div className="app-shell">
+      {/* Sidebar scrim (mobile) */}
+      {sidebarOpen && <button aria-label="Close sidebar" className="sidebar-scrim" onClick={() => setSidebarOpen(false)}/>}
+
+      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
+      <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark"><span/><span/><span/><span/></div>
+          <div className="brand-name">DEX<span>AI</span><small>ENTERPRISE INTELLIGENCE</small></div>
+          <button className="mobile-close" onClick={() => setSidebarOpen(false)}><X size={18}/></button>
+        </div>
+
+        <button className="new-chat" onClick={newChat}>
+          <Plus size={17}/>New chat<span className="shortcut">⌘ K</span>
+        </button>
+
+        <div className="side-section">
+          <div className="side-label">WORKSPACE</div>
+          <button className={`nav-item ${mode === 'database'  ? 'active' : ''}`} onClick={() => setMode('database')}>
+            <Database size={16}/>Database query<ChevronDown className="nav-chevron" size={14}/>
+          </button>
+          <button className={`nav-item ${mode === 'documents' ? 'active' : ''}`} onClick={() => setMode('documents')}>
+            <FileText size={16}/>Document intelligence<ChevronDown className="nav-chevron" size={14}/>
           </button>
         </div>
 
-        {/* Model & System Telemetry Card */}
-        <div className="system-card">
-          <div className="system-row">
-            <span className="system-label"><Cpu size={13} /> Active Model</span>
-            <span className="model-chip" title={health.model}>
-              {health.model.includes('/') ? health.model.split('/')[1] : health.model}
-            </span>
-          </div>
-          <div className="system-row">
-            <span className="system-label"><Database size={13} /> MySQL DB</span>
-            <span className="db-chip">
-              <span
-                className={`status-indicator ${
-                  health.database_connected ? 'online' : 'offline'
-                }`}
-              />
-              {health.database_name || 'MySQL'}
-            </span>
-          </div>
-          <div className="system-row">
-            <span className="system-label"><ShieldCheck size={13} /> Mode</span>
-            <span className="badge-readonly">Read-Only (Safe)</span>
-          </div>
+        <div className="side-section history-section">
+          <div className="side-label history-label">RECENT CHATS <MoreHorizontal size={16}/></div>
+          {messages.length
+            ? <button className="history-link"><MessageSquare size={14}/>{messages[messages.length - 1].question}</button>
+            : <div className="history-empty">Your recent conversations will appear here.</div>}
         </div>
 
-        {/* Quick Schema Browser */}
-        <div className="sidebar-section">
-          <div className="section-header">
-            <span><Layers size={14} /> Database Schema</span>
-            <span className="table-count-badge">{tableNames.length} tables</span>
+        <div className="side-section docs-side">
+          <div className="side-label docs-label">
+            YOUR DOCUMENTS
+            <button aria-label="Upload PDF" onClick={() => fileInput.current?.click()}><Plus size={14}/></button>
           </div>
-          <div className="tables-list">
-            {tableNames.length === 0 ? (
-              <div className="empty-subtext">No tables introspected yet.</div>
-            ) : (
-              tableNames.map((tbl) => (
-                <div
-                  key={tbl}
-                  className={`table-item ${selectedTable === tbl ? 'active' : ''}`}
-                  onClick={() => {
-                    setSelectedTable(tbl);
-                    setShowSchemaDrawer(true);
-                  }}
-                >
-                  <div className="table-name-wrap">
-                    <Table size={13} className="tbl-icon" />
-                    <span className="tbl-title">{tbl}</span>
-                  </div>
-                  <span className="col-count">
-                    {schema[tbl]?.columns?.length || 0} cols
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Session Query History */}
-        <div className="sidebar-section history-section">
-          <div className="section-header">
-            <span>Query History</span>
-            {messages.length > 0 && (
-              <button
-                className="clear-btn"
-                onClick={handleClearChat}
-                title="Clear current session queries"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          <div className="history-list">
-            {messages.length === 0 ? (
-              <div className="empty-subtext">Recent queries will appear here.</div>
-            ) : (
-              messages.map((m) => (
+          {documents.length
+            ? documents.map(doc => (
                 <button
-                  key={m.id}
-                  className="history-item"
-                  onClick={() => handleSend(m.question)}
+                  className={`doc-link ${activeDoc?.id === doc.id ? 'doc-active' : ''}`}
+                  key={doc.id}
+                  onClick={() => { setActiveDoc(doc); setMode('documents'); }}
                 >
-                  <span className="history-text">{m.question}</span>
-                  <span className="history-time">{m.timestamp}</span>
+                  <FileText size={14}/><span>{doc.name}</span>
+                  <i className={`doc-status ${doc.status === 'Ready' ? 'ready' : doc.status === 'Failed' ? 'failed' : ''}`}/>
                 </button>
               ))
-            )}
+            : <div className="history-empty">No PDFs uploaded yet.</div>}
+        </div>
+
+        <div className="sidebar-bottom">
+          <div className="plan-card">
+            <div className="plan-icon"><Zap size={15}/></div>
+            <div><b>DEX AI Workspace</b><span>Groq · Llama 4 Scout</span></div>
+            <span className="connected-pill">LIVE</span>
+          </div>
+          <button className="nav-item settings-item"><Settings2 size={16}/>Settings</button>
+          <div className="profile">
+            <div className="avatar">D</div>
+            <div><b>Data workspace</b><span>Enterprise plan</span></div>
+            <MoreHorizontal size={17}/>
           </div>
         </div>
 
-        <div className="sidebar-footer">
-          <button
-            className="secondary-btn w-full"
-            onClick={() => setShowSchemaDrawer(!showSchemaDrawer)}
-          >
-            <Layers size={14} />
-            {showSchemaDrawer ? 'Hide Schema Drawer' : 'Inspect Full Schema'}
-          </button>
-        </div>
+        <input ref={fileInput} type="file" accept="application/pdf,.pdf" multiple hidden onChange={e => addFiles(e.target.files)}/>
       </aside>
 
-      {/* ── Main Workspace ────────────────────────────────────────── */}
-      <main className="dex-main">
-        {/* Top Navbar */}
-        <header className="dex-topbar">
-          <div className="topbar-left">
-            <span className="workspace-badge">Agentic Workspace</span>
-            <ChevronRight size={14} className="crumb-sep" />
-            <span className="current-view">Natural Language SQL Generator</span>
+      {/* ── Main area ───────────────────────────────────────────────────── */}
+      <main
+        className="main-area"
+        onDragOver={e  => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false); }}
+        onDrop={e      => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+      >
+        {/* Topbar */}
+        <header className="topbar">
+          <button className="menu-toggle" onClick={() => setSidebarOpen(true)}><Menu size={20}/></button>
+          <div className="breadcrumb">
+            <span>Workspace</span><span className="crumb-sep">/</span>
+            <b>{mode === 'database' ? 'Database query' : 'Document intelligence'}</b>
           </div>
           <div className="topbar-right">
-            <div className="engine-status">
-              <span className="pulse-dot" />
-              <span>Groq LPU Acceleration</span>
-            </div>
-            {messages.length > 0 && (
-              <button className="new-query-btn" onClick={handleClearChat}>
-                <RotateCcw size={13} /> New Conversation
-              </button>
-            )}
+            <span className="secure-label"><ShieldCheck size={14}/> Secure workspace</span>
+            <button className="top-icon"><CircleHelp size={17}/></button>
+            <div className="avatar top-avatar">D</div>
           </div>
         </header>
 
-        {/* Conversation / Query Timeline */}
-        <div className="dex-feed">
-          {messages.length === 0 ? (
-            <div className="empty-hero">
-              <div className="hero-badge">
-                <Sparkles size={16} /> AI-POWERED DATABASE INTELLIGENCE
-              </div>
-              <h2 className="hero-title">
-                Ask your database in <span>plain English.</span>
-              </h2>
-              <p className="hero-desc">
-                DEX AI dynamically converts natural language questions into valid, optimized MySQL
-                queries using Groq-accelerated models, executes them safely in read-only mode, and
-                returns formatted results instantly.
-              </p>
-
-              {/* Sample Queries Grid */}
-              <div className="sample-categories">
-                {sampleCategories.map((cat, idx) => (
-                  <div key={idx} className="sample-category-box">
-                    <h3 className="category-title">{cat.category}</h3>
-                    <div className="sample-chips">
-                      {cat.questions.map((q, qIdx) => (
-                        <button
-                          key={qIdx}
-                          className="query-chip"
-                          onClick={() => handleSend(q)}
-                        >
-                          <ChevronRight size={13} className="chip-arrow" />
-                          <span>{q}</span>
-                        </button>
-                      ))}
-                    </div>
+        {/* Content */}
+        <div className="content-scroll">
+          {messages.length === 0
+            /* ── Welcome / home screen ──────────────────────────────────── */
+            ? <section className="welcome-wrap">
+                <div className="welcome-inner">
+                  <div className="eyebrow">
+                    <span className="eyebrow-line"/> INTELLIGENCE, UNLOCKED <span className="eyebrow-line"/>
                   </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="messages-stream">
-              {messages.map((msg) => (
-                <div key={msg.id} className="message-block">
-                  {/* User Question */}
-                  <div className="user-row">
-                    <div className="avatar user-avatar">U</div>
-                    <div className="user-body">
-                      <div className="meta-line">
-                        <span className="author-name">You</span>
-                        <span className="time-tag">{msg.timestamp}</span>
-                      </div>
-                      <p className="question-text">{msg.question}</p>
-                    </div>
+                  <div className="welcome-icon">
+                    <div className="welcome-glow"/>
+                    <Sparkles size={25}/>
                   </div>
+                  <h1>Welcome to <span>DEX AI.</span></h1>
+                  <p className="welcome-subtitle">What would you like to know about your business?</p>
 
-                  {/* Agent Response */}
-                  <div className="agent-row">
-                    <div className="avatar agent-avatar">
-                      <Sparkles size={15} />
-                    </div>
-                    <div className="agent-body">
-                      <div className="meta-line">
-                        <span className="author-name">DEX AI</span>
-                        <span className="agent-tag">MySQL Engine</span>
-                        {msg.result?.execution_time_ms != null && (
-                          <span className="runtime-tag">
-                            <Clock size={11} />
-                            {msg.result.execution_time_ms} ms
-                          </span>
-                        )}
-                      </div>
+                  <Composer/>
 
-                      {/* Loading State */}
-                      {msg.pending && (
-                        <div className="loading-card">
-                          <RefreshCw size={16} className="spin-icon" />
-                          <span>Generating SQL & querying MySQL via Groq LPU...</span>
-                        </div>
-                      )}
-
-                      {/* Error State */}
-                      {msg.error && (
-                        <div className="error-card">
-                          <AlertCircle size={18} className="err-icon" />
-                          <div>
-                            <strong>Query Failed</strong>
-                            <p>{msg.error}</p>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Success Results */}
-                      {msg.result?.success && (
-                        <div className="result-container">
-                          {/* Generated SQL Code Block */}
-                          {msg.result.sql && (
-                            <div className="sql-box">
-                              <div className="sql-box-header">
-                                <div className="sql-header-title">
-                                  <Terminal size={14} />
-                                  <span>Generated MySQL Query</span>
-                                </div>
-                                <div className="sql-header-actions">
-                                  <span className="safe-pill">
-                                    <ShieldCheck size={12} /> Read-Only Verified
-                                  </span>
-                                  <button
-                                    className="copy-sql-btn"
-                                    onClick={() => copyToClipboard(msg.result.sql, msg.id)}
-                                  >
-                                    {copiedId === msg.id ? (
-                                      <>
-                                        <Check size={12} /> Copied!
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Copy size={12} /> Copy SQL
-                                      </>
-                                    )}
-                                  </button>
-                                </div>
-                              </div>
-                              <pre className="sql-code">
-                                <code>{highlightSql(msg.result.sql)}</code>
-                              </pre>
-                            </div>
-                          )}
-
-                          {/* Data Results Table */}
-                          {msg.result.columns && msg.result.rows && (
-                            <div className="table-card">
-                              <div className="table-card-header">
-                                <div className="table-meta">
-                                  <Table size={14} />
-                                  <span>Query Results</span>
-                                  <span className="record-count">
-                                    {msg.result.count}{' '}
-                                    {msg.result.count === 1 ? 'row' : 'rows'} returned
-                                  </span>
-                                </div>
-                                <div className="table-actions">
-                                  <div className="table-search-wrap">
-                                    <Search size={12} className="search-icon" />
-                                    <input
-                                      type="text"
-                                      placeholder="Filter records..."
-                                      className="table-search-input"
-                                      value={tableSearch[msg.id] || ''}
-                                      onChange={(e) =>
-                                        setTableSearch({
-                                          ...tableSearch,
-                                          [msg.id]: e.target.value,
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                  <button
-                                    className="export-btn"
-                                    onClick={() =>
-                                      downloadCsv(
-                                        msg.result.columns,
-                                        msg.result.rows,
-                                        `dex_query_${msg.id}.csv`
-                                      )
-                                    }
-                                  >
-                                    <Download size={13} /> Export CSV
-                                  </button>
-                                </div>
-                              </div>
-
-                              {/* Table Scroll Area */}
-                              <div className="table-scroll-wrap">
-                                {(() => {
-                                  const term = (tableSearch[msg.id] || '').toLowerCase();
-                                  const filteredRows = term
-                                    ? msg.result.rows.filter((r) =>
-                                        Object.values(r).some((v) =>
-                                          String(v || '').toLowerCase().includes(term)
-                                        )
-                                      )
-                                    : msg.result.rows;
-
-                                  if (filteredRows.length === 0) {
-                                    return (
-                                      <div className="empty-results-message">
-                                        No records match your filter criteria.
-                                      </div>
-                                    );
-                                  }
-
-                                  return (
-                                    <table className="data-table">
-                                      <thead>
-                                        <tr>
-                                          {msg.result.columns.map((col) => (
-                                            <th key={col}>{col}</th>
-                                          ))}
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {filteredRows.map((row, rIdx) => (
-                                          <tr key={rIdx}>
-                                            {msg.result.columns.map((col) => {
-                                              const val = row[col];
-                                              return (
-                                                <td key={col}>
-                                                  {val === null || val === undefined ? (
-                                                    <span className="null-indicator">—</span>
-                                                  ) : (
-                                                    String(val)
-                                                  )}
-                                                </td>
-                                              );
-                                            })}
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                  <div className="suggestion-label">GET STARTED WITH A QUESTION</div>
+                  <div className="suggestions">
+                    {suggestions.map(({ icon: Icon, title, prompt }) => (
+                      <button className="suggestion-card" key={title} onClick={() => { setMode('database'); submit(prompt, 'database'); }}>
+                        <span className="suggestion-icon"><Icon size={16}/></span>
+                        <span>{title}</span>
+                        <ArrowRight className="suggestion-arrow" size={15}/>
+                      </button>
+                    ))}
                   </div>
+                  <div className="welcome-foot"><ShieldCheck size={13}/> Your business data stays private and secure</div>
                 </div>
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+              </section>
+
+            /* ── Conversation view ──────────────────────────────────────── */
+            : <section className="conversation">
+                <div className="conversation-heading">
+                  <div>
+                    <div className="eyebrow left-eyebrow">{mode === 'database' ? 'DATABASE QUERY' : 'DOCUMENT INTELLIGENCE'}</div>
+                    <h2>Ask. Query. <span>Discover.</span></h2>
+                  </div>
+                  <button className="new-convo-btn" onClick={newChat}><Plus size={15}/>New chat</button>
+                </div>
+
+                {messages.map(msg => (
+                  <article className="message-pair" key={msg.id}>
+                    <div className="user-question">
+                      <div className="avatar user-avatar">D</div>
+                      <div>
+                        <div className="msg-author">You <span>· Just now</span></div>
+                        <p>{msg.question}</p>
+                      </div>
+                    </div>
+                    <div className="ai-answer">
+                      <div className="ai-avatar"><Sparkles size={15}/></div>
+                      <div className="answer-main">
+                        <div className="msg-author">
+                          DEX AI <span className="ai-badge">{msg.mode === 'database' ? 'DATA ASSISTANT' : 'DOCUMENT AI'}</span>
+                        </div>
+                        {msg.pending
+                          ? <div className="loading-state"><LoaderCircle size={16} className="spin"/>Analyzing your question<span className="loading-dots">•••</span></div>
+                          : <Answer message={msg}/>}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+
+                {/* Scroll anchor */}
+                <div ref={bottomRef}/>
+
+                {/* Bottom composer */}
+                <div className="bottom-composer">
+                  <Composer mini/>
+                  <div className="composer-hint">DEX AI can make mistakes. Verify important results.</div>
+                </div>
+              </section>}
         </div>
 
-        {/* ── Bottom Input Composer ──────────────────────────────── */}
-        <div className="dex-composer-area">
-          <div className="composer-container">
-            <textarea
-              ref={textareaRef}
-              rows={1}
-              value={input}
-              placeholder="Ask a question about employees, salaries, departments, or sales..."
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={loading}
-              className="composer-textarea"
-            />
-            <div className="composer-toolbar">
-              <div className="composer-hint">
-                <span className="kbd">↵ Enter</span> to run query &nbsp;•&nbsp;{' '}
-                <span className="kbd">Shift + Enter</span> for new line
-              </div>
-              <button
-                className="send-query-btn"
-                disabled={!input.trim() || loading}
-                onClick={() => handleSend()}
-              >
-                {loading ? <RefreshCw size={15} className="spin-icon" /> : <Send size={15} />}
-                <span>{loading ? 'Executing...' : 'Ask Database'}</span>
-              </button>
+        {/* Drop overlay */}
+        {dragging && (
+          <div className="drop-overlay">
+            <div className="drop-card">
+              <UploadCloud size={31}/>
+              <b>Drop your PDF here</b>
+              <span>We'll add it to your document library</span>
             </div>
           </div>
+        )}
+
+        {/* Statusbar with live DB status */}
+        <div className="statusbar">
+          <span><span className="status-dot"/> <DbStatus/></span>
+          <span>DEX AI <b>·</b> Ask. Query. Discover.</span>
         </div>
       </main>
-
-      {/* ── Schema Explorer Drawer (Right Side) ──────────────────── */}
-      {showSchemaDrawer && (
-        <aside className="dex-drawer">
-          <div className="drawer-header">
-            <div>
-              <h3 className="drawer-title">Database Schema</h3>
-              <span className="drawer-subtitle">
-                {health.database_name} ({tableNames.length} tables)
-              </span>
-            </div>
-            <button className="close-drawer-btn" onClick={() => setShowSchemaDrawer(false)}>
-              ✕
-            </button>
-          </div>
-
-          <div className="drawer-table-selector">
-            {tableNames.map((tbl) => (
-              <button
-                key={tbl}
-                className={`drawer-tab-btn ${selectedTable === tbl ? 'active' : ''}`}
-                onClick={() => setSelectedTable(tbl)}
-              >
-                {tbl}
-              </button>
-            ))}
-          </div>
-
-          {selectedTable && schema[selectedTable] && (
-            <div className="drawer-table-content">
-              <div className="table-detail-header">
-                <h4>Table: <code>{selectedTable}</code></h4>
-                <button
-                  className="quick-sample-query-btn"
-                  onClick={() => {
-                    handleSend(`Show the first 10 records from the ${selectedTable} table.`);
-                    setShowSchemaDrawer(false);
-                  }}
-                >
-                  Query Table
-                </button>
-              </div>
-
-              <div className="columns-spec-list">
-                <div className="col-spec-header">
-                  <span>Column Name</span>
-                  <span>Data Type</span>
-                  <span>Constraint</span>
-                </div>
-                {schema[selectedTable]?.columns?.map((c) => {
-                  const isPk = schema[selectedTable]?.primary_keys?.includes(c.name);
-                  return (
-                    <div key={c.name} className="col-spec-row">
-                      <span className="col-name">
-                        {c.name}
-                        {isPk && <span className="pk-tag">PK</span>}
-                      </span>
-                      <span className="col-type">{c.type}</span>
-                      <span className="col-nullable">
-                        {c.nullable ? 'NULL' : 'NOT NULL'}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {schema[selectedTable]?.foreign_keys?.length > 0 && (
-                <div className="fks-section">
-                  <h5>Foreign Keys</h5>
-                  {schema[selectedTable].foreign_keys.map((fk, idx) => (
-                    <div key={idx} className="fk-item">
-                      <code>{(fk.constrained_columns || []).join(', ')}</code>
-                      <span>→</span>
-                      <code>
-                        {fk.referred_table}.{(fk.referred_columns || []).join(', ')}
-                      </code>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </aside>
-      )}
     </div>
   );
 }

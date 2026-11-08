@@ -1,0 +1,467 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║           DEX AI — Agentic Text-to-SQL: Complete Workflow Explanation        ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+Written for: DEX AI Project (DEX-AI GitHub repo)
+Version    : 1.0
+Date       : November 2026
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1 — WHAT IS "AGENTIC TEXT-TO-SQL"?
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Traditional SQL requires users to know the query language. Text-to-SQL lets a
+user type a plain English question like:
+
+    "Show the average salary of each department."
+
+And the system automatically:
+  1. Understands the question (via an LLM)
+  2. Looks at the actual database tables and columns
+  3. Writes the correct SQL query
+  4. Executes it safely
+  5. Returns real data back to the user
+
+"Agentic" means the system acts autonomously — it decides when to retry, when
+to reject dangerous input, when to handle errors — without human intervention.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2 — SYSTEM ARCHITECTURE (Bird's-eye view)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                         USER'S BROWSER                              │
+  │   React (Vite)  ·  DEX AI UI  ·  http://localhost:5173             │
+  └───────────────────────────────┬─────────────────────────────────────┘
+                                  │  POST /api/query  { question: "…" }
+                                  │  (HTTP/JSON via Axios)
+                                  ▼
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │               FASTAPI BACKEND  (api.py)                             │
+  │               http://localhost:8000                                 │
+  │                                                                     │
+  │  Endpoints:                                                         │
+  │    POST /api/query    ← main pipeline                               │
+  │    GET  /api/health   ← DB + LLM connectivity check                │
+  │    GET  /api/schema   ← live schema browser                         │
+  └────────────────────┬────────────────────────────────────────────────┘
+                        │
+         ┌──────────────┼──────────────────┐
+         │                                  │
+         ▼                                  ▼
+  ┌──────────────────┐            ┌──────────────────────┐
+  │  SQL GENERATOR   │            │   QUERY EXECUTOR     │
+  │  (agents/)       │            │   (service/)         │
+  │                  │            │                      │
+  │  · Build prompt  │  SQL query │  · Read-only guard   │
+  │  · Call Groq API ├───────────►│  · SQLAlchemy text() │
+  │  · Retry logic   │            │  · Fetch rows        │
+  │  · Safety checks │            │  · Serialize data    │
+  └────────┬─────────┘            └──────────┬───────────┘
+           │                                  │
+           ▼                                  ▼
+  ┌──────────────────┐            ┌──────────────────────┐
+  │  GROQ API (LLM)  │            │  MYSQL DATABASE      │
+  │  Llama 4 Scout   │            │  company_analytics   │
+  │  (free tier)     │            │  (localhost:3306)    │
+  └──────────────────┘            └──────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3 — STEP-BY-STEP WORKFLOW (What happens on each request)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+USER TYPES: "Find the top 5 highest-paid employees."
+
+─── STEP 1 ─── Frontend sends HTTP request ──────────────────────────────────
+
+  The React app (App.jsx) calls:
+      POST http://localhost:8000/api/query
+      Body: { "question": "Find the top 5 highest-paid employees." }
+
+  The UI immediately shows a loading spinner ("Analyzing your question •••").
+
+
+─── STEP 2 ─── FastAPI receives and validates ───────────────────────────────
+
+  api.py receives the request.
+  Pydantic validates the body (must be a non-empty string, max 2000 chars).
+  A timer starts (time.perf_counter) to measure total execution time.
+
+
+─── STEP 3 ─── SQL Generator: Schema Fetching ───────────────────────────────
+
+  agents/sql_generator.py calls get_database_schema() from schema.py.
+
+  schema.py uses SQLAlchemy's Inspector to query MySQL INFORMATION_SCHEMA
+  and returns a Python dict describing every table, column, type, and
+  foreign key — something like:
+
+      {
+        "employees": {
+          "columns": [
+            { "name": "id",         "type": "INT",     "nullable": false },
+            { "name": "name",       "type": "VARCHAR", "nullable": false },
+            { "name": "salary",     "type": "DECIMAL", "nullable": true  },
+            { "name": "dept_id",    "type": "INT",     "nullable": true  }
+          ],
+          "primary_keys": ["id"],
+          "foreign_keys": [{ "constrained_columns": ["dept_id"],
+                             "referred_table": "departments",
+                             "referred_columns": ["id"] }]
+        },
+        "departments": { ... }
+      }
+
+  WHY: The LLM can only write accurate SQL if it knows what tables and
+  columns actually exist. Without this, it would hallucinate table names.
+
+
+─── STEP 4 ─── SQL Generator: Prompt Building ───────────────────────────────
+
+  Two prompts are assembled:
+
+  SYSTEM PROMPT (tells the model who it is and what rules to follow):
+  ──────────────────────────────────────────────────────────────────
+      "You are an expert MySQL 8.0 database engineer.
+       Generate only SELECT queries.
+       Use only tables and columns in the schema.
+       Never generate INSERT, UPDATE, DELETE, DROP, etc.
+       Return only raw SQL — no explanations, no markdown."
+
+  USER PROMPT (the actual task):
+  ──────────────────────────────
+      "DATABASE SCHEMA:
+       { <full schema JSON> }
+
+       USER QUESTION:
+       Find the top 5 highest-paid employees.
+
+       Generate the MySQL query."
+
+
+─── STEP 5 ─── Groq API Call (with retry) ───────────────────────────────────
+
+  The generator calls the Groq API (api.groq.com) using the groq SDK.
+
+  Model used : meta-llama/llama-4-scout-17b-16e-instruct
+  Temperature: 0  (deterministic — no creative randomness for SQL)
+  Max tokens : 512 (SQL queries are short)
+
+  RETRY LOGIC (via tenacity library):
+  ┌─────────────────────────────────────────────────────┐
+  │  Attempt 1 fails (RateLimitError / ConnectionError) │
+  │  Wait 2 seconds                                     │
+  │  Attempt 2 fails                                    │
+  │  Wait 4 seconds                                     │
+  │  Attempt 3 fails                                    │
+  │  Wait 8 seconds (capped at 60s)                     │
+  │  Attempt 4 → if still fails, return error to user   │
+  └─────────────────────────────────────────────────────┘
+
+  The LLM responds with:
+      SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5;
+
+
+─── STEP 6 ─── SQL Safety Checks ────────────────────────────────────────────
+
+  Three sequential guards run on the LLM's output:
+
+  GUARD 1 — Markdown stripping:
+      Removes ```sql ... ``` fences if the model added them.
+
+  GUARD 2 — Read-only enforcement:
+      Regex checks for forbidden keywords at the start:
+        INSERT, UPDATE, DELETE, DROP, CREATE, ALTER, TRUNCATE, REPLACE, MERGE
+      If any are found → reject with "Generated statement is not safe".
+      ALSO checks the query must start with SELECT.
+
+  GUARD 3 — Syntax validation (sqlglot):
+      Parses the SQL using the sqlglot library with dialect="mysql".
+      If the SQL has syntax errors → reject with the parse error message.
+      This catches LLM mistakes like missing commas or wrong MySQL syntax.
+
+
+─── STEP 7 ─── Query Executor: Safe MySQL Execution ─────────────────────────
+
+  service/query_executor.py receives the validated SQL.
+
+  SECONDARY READ-ONLY CHECK (defence-in-depth):
+      Even though sql_generator already checked, the executor checks again.
+      This means: even if someone bypasses the generator, the executor
+      is an independent safety wall.
+
+  EXECUTION:
+      Uses SQLAlchemy's text() with parameterised execution.
+      text() does NOT do string concatenation — it goes through the MySQL
+      protocol layer, which prevents SQL injection attacks.
+
+      conn.execute(text("SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5"))
+
+  RESULT SERIALISATION:
+      Database rows come back as SQLAlchemy Row objects.
+      The executor converts them to plain Python dicts.
+      Special types are handled:
+        - datetime / date  → ISO 8601 string ("2024-01-15")
+        - Decimal numbers  → Python float (3 → 3.0, not "3")
+        - None values      → None (shown as "—" in the UI)
+
+
+─── STEP 8 ─── FastAPI returns JSON ─────────────────────────────────────────
+
+  The timer stops. The response is assembled:
+
+      {
+        "success": true,
+        "question": "Find the top 5 highest-paid employees.",
+        "sql": "SELECT name, salary FROM employees ORDER BY salary DESC LIMIT 5",
+        "columns": ["name", "salary"],
+        "rows": [
+          { "name": "Alice",   "salary": 95000.0 },
+          { "name": "Bob",     "salary": 88000.0 },
+          { "name": "Charlie", "salary": 82000.0 },
+          { "name": "Diana",   "salary": 79500.0 },
+          { "name": "Eve",     "salary": 76000.0 }
+        ],
+        "count": 5,
+        "execution_time": 1243.7
+      }
+
+  execution_time is in milliseconds (here 1.2 seconds total, dominated by
+  the Groq API call; the MySQL query itself takes under 10ms).
+
+
+─── STEP 9 ─── Frontend renders results ─────────────────────────────────────
+
+  The React App receives the JSON.
+
+  It renders:
+    ┌──────────────────────────────────────────────────────────┐
+    │ ● Generated SQL                     [🛡 Read only] [Copy]│
+    │                                                          │
+    │  SELECT name, salary                                     │
+    │  FROM employees                                          │
+    │  ORDER BY salary DESC                                    │
+    │  LIMIT 5                                                 │
+    └──────────────────────────────────────────────────────────┘
+    ● Query executed   🕐 1243.7 ms
+
+    ┌──────────┬────────────┐
+    │ name     │ salary     │  ← 5 records
+    ├──────────┼────────────┤
+    │ Alice    │ 95000.0    │
+    │ Bob      │ 88000.0    │
+    │ Charlie  │ 82000.0    │
+    │ Diana    │ 79500.0    │
+    │ Eve      │ 76000.0    │
+    └──────────┴────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4 — THE LLM MODEL EXPLAINED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MODEL: meta-llama/llama-4-scout-17b-16e-instruct
+
+Provider  : Groq (https://console.groq.com)
+Cost      : FREE — no credit card required
+Hardware  : Groq LPU (Language Processing Unit) — custom silicon for LLMs
+
+What "17b-16e" means:
+  17b = 17 billion parameters (the "brain size" / knowledge capacity)
+  16e = 16 experts in a Mixture-of-Experts architecture
+        (only a subset of experts activate per token — efficient)
+
+What "instruct" means:
+  The model has been fine-tuned specifically to follow instructions precisely.
+  Unlike a base model (which just predicts next words), an instruct model
+  understands commands like "Only output SQL, no explanations."
+
+Why we use temperature=0:
+  Temperature controls creativity / randomness.
+  At 0 → always picks the most probable next token → deterministic SQL output.
+  At 1 → random creative writing (bad for SQL — different output every time).
+
+Free tier limits:
+  30 requests per minute
+  1,000 requests per day
+  30,000 tokens per minute
+  500,000 tokens per day
+
+The system prompt + schema takes ~300–600 tokens input.
+The SQL response is ~20–80 tokens output.
+So each query uses about 400–700 tokens total.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5 — SECURITY MODEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+THREAT: SQL Injection
+HOW PREVENTED: SQLAlchemy text() uses the MySQL wire protocol to send
+the query as a single statement. The executor doesn't use Python f-strings
+or string concatenation with user input.
+
+THREAT: Mutation attack (user asks to delete/update data)
+HOW PREVENTED: Two independent regex guards block anything that isn't
+a pure SELECT statement. Even if the LLM were to generate a DELETE query,
+it would be caught and rejected before hitting the database.
+
+THREAT: LLM hallucinating table/column names
+HOW PREVENTED: The schema is fetched live from MySQL every request.
+The LLM is told "use ONLY tables and columns provided". sqlglot validates
+the syntax, but column-name validation happens implicitly at execution time
+(MySQL will return an error if a column doesn't exist).
+
+THREAT: API key exposure
+HOW PREVENTED: Keys are stored only in .env files, which are excluded
+from git via .gitignore. Never hardcoded in source code.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6 — FILE STRUCTURE AND RESPONSIBILITIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DEX/
+├── index.html                   HTML shell (Vite entry point)
+├── src/
+│   ├── main.jsx                 React bootstrapper — mounts <App/>
+│   ├── App.jsx                  Main UI: chat, sidebar, results, DB status
+│   ├── styles.css               Global CSS (dark theme, layout, components)
+│   └── services/
+│       └── api.js               Axios client — calls backend endpoints
+│
+├── backend/
+│   ├── api.py              ★    FastAPI server — HTTP interface
+│   │                            Endpoints: /api/query, /api/health, /api/schema
+│   │
+│   ├── agents/
+│   │   └── sql_generator.py ★  LLM integration
+│   │                            - Fetches schema
+│   │                            - Builds prompts
+│   │                            - Calls Groq with retry
+│   │                            - Validates SQL safety
+│   │
+│   ├── service/
+│   │   └── query_executor.py ★ MySQL executor
+│   │                            - Secondary read-only guard
+│   │                            - Runs query via SQLAlchemy
+│   │                            - Serialises results
+│   │
+│   ├── connection.py            SQLAlchemy engine setup (reads .env)
+│   ├── schema.py                Live schema introspection via Inspector
+│   ├── main.py                  CLI test runner (not the HTTP server)
+│   ├── requirements.txt         Python dependencies
+│   └── .env                     Secret config (DB creds, Groq key) — NOT in git
+│
+├── .env.example                 Safe template showing env var names
+├── README.md                    Project documentation
+└── WORKFLOW.txt                 This file
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7 — HOW TO RUN THE APPLICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You need TWO terminals open simultaneously.
+
+TERMINAL 1 — Start the Python backend:
+─────────────────────────────────────
+  cd "C:\Users\irfan\Downloads\plan b\DEX"
+  venv\Scripts\activate
+  cd backend
+  uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+
+  You should see:
+    INFO:     Uvicorn running on http://0.0.0.0:8000
+    INFO:     Application startup complete.
+
+TERMINAL 2 — Start the React frontend:
+───────────────────────────────────────
+  cd "C:\Users\irfan\Downloads\plan b\DEX"
+  npm run dev      (or: npx vite)
+
+  You should see:
+    VITE v6.x  ready in 400ms
+    ➜  Local: http://localhost:5173/
+
+Then open your browser at: http://localhost:5173
+
+
+VERIFY DATABASE CONNECTIVITY:
+  Visit: http://localhost:8000/api/health
+  Expected response:
+    {
+      "status": "ok",
+      "database": {
+        "connected": true,
+        "name": "company_analytics",
+        "table_count": 3
+      },
+      "llm": {
+        "provider": "Groq",
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct"
+      }
+    }
+
+  The statusbar at the bottom of the UI also shows the DB name and table count
+  once the health check completes on page load.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8 — ERROR HANDLING MATRIX
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Scenario                    │ What happens
+────────────────────────────┼─────────────────────────────────────────────────
+MySQL is offline            │ /api/health → { connected: false }
+                            │ /api/query  → DB connection error returned
+                            │ UI statusbar shows "DB offline" with red icon
+────────────────────────────┼─────────────────────────────────────────────────
+Groq rate limit hit (429)   │ Automatic retry with exponential backoff
+                            │ Up to 4 attempts (2s, 4s, 8s delays)
+                            │ If all fail → user sees "Rate limit exceeded"
+────────────────────────────┼─────────────────────────────────────────────────
+Wrong Groq model name       │ APIStatusError 404 → user sees model error
+                            │ Fix: update GROQ_MODEL in .env
+────────────────────────────┼─────────────────────────────────────────────────
+LLM writes DELETE query     │ Read-only regex guard rejects it
+                            │ User sees "not a safe SELECT query"
+────────────────────────────┼─────────────────────────────────────────────────
+LLM writes bad SQL syntax   │ sqlglot parse fails
+                            │ User sees "Generated SQL has a syntax error"
+────────────────────────────┼─────────────────────────────────────────────────
+Off-schema question         │ LLM returns UNSUPPORTED_QUESTION
+                            │ User sees "Cannot be answered from schema"
+────────────────────────────┼─────────────────────────────────────────────────
+Backend is offline          │ Axios ECONNREFUSED
+                            │ User sees "Could not reach the DEX AI API"
+────────────────────────────┼─────────────────────────────────────────────────
+Request takes > 120 seconds │ Axios timeout
+                            │ User sees "The request took too long"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9 — TECHNOLOGY STACK SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Layer         │ Technology              │ Purpose
+──────────────┼─────────────────────────┼──────────────────────────────────────
+Frontend      │ React 18 + Vite         │ Chat UI, results table, SQL viewer
+UI Icons      │ Lucide React            │ Icon library
+HTTP Client   │ Axios                   │ Frontend ↔ Backend communication
+Backend API   │ FastAPI + Uvicorn       │ Python HTTP server (async)
+Data Schemas  │ Pydantic v2             │ Request/response validation
+LLM           │ Groq SDK + Llama 4      │ Natural language → SQL generation
+Retry         │ tenacity                │ Exponential backoff on rate limits
+SQL Validate  │ sqlglot                 │ MySQL syntax checking
+Database ORM  │ SQLAlchemy 2.0          │ Connection pooling + safe queries
+Database      │ MySQL 8.0               │ The actual data store
+Config        │ python-dotenv           │ Environment variable management
+Version Ctrl  │ Git + GitHub            │ Source code management
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF WORKFLOW DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
