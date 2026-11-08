@@ -210,7 +210,57 @@ async def get_schema():
         raise HTTPException(status_code=500, detail=f"Could not retrieve schema: {exc}")
 
 
+# ── Document endpoints ────────────────────────────────────────────────────────
+# These stubs return a clear, friendly message so the frontend shows an
+# informative error instead of a raw 404.  Replace with real PDF/RAG logic
+# (e.g. LangChain + ChromaDB) when you add document intelligence.
+
+class DocumentAskRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+    document_id: Optional[str] = None
+
+
+@app.post("/api/documents/upload")
+async def upload_document(request: Request):
+    """
+    Document upload endpoint.
+    Currently not implemented — returns a helpful 501 response.
+    """
+    logger.info("Document upload attempted — feature not yet configured.")
+    return JSONResponse(
+        status_code=501,
+        content={
+            "success": False,
+            "error": (
+                "Document Intelligence is not yet configured. "
+                "This feature requires a PDF parser and a vector store (e.g. ChromaDB). "
+                "Switch to 'Database query' mode to query your MySQL data."
+            ),
+        },
+    )
+
+
+@app.post("/api/documents/ask")
+async def ask_document(body: DocumentAskRequest):
+    """
+    Document Q&A endpoint.
+    Currently not implemented — returns a helpful 501 response.
+    """
+    logger.info("Document ask attempted — feature not yet configured.")
+    return JSONResponse(
+        status_code=501,
+        content={
+            "success": False,
+            "error": (
+                "Document Intelligence is not yet configured. "
+                "Switch to 'Database query' mode to query your MySQL data with natural language."
+            ),
+        },
+    )
+
+
 # ── Dev entry-point ───────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
+

@@ -1,57 +1,22 @@
-# DEX AI — Text-to-SQL Frontend
+# DEX AI frontend
 
-A modern, responsive React + Vite frontend specifically designed for the **Agentic Text-to-SQL** engine.
+## Run locally
 
-## Features
-
-- **Live LLM Model & Database Telemetry**: Displays the active Groq model (e.g. `openai/gpt-oss-120b` or `meta-llama/llama-4-scout-17b-16e-instruct`), MySQL connection status, and read-only mode guarantee.
-- **Natural Language Querying**: Asks questions in plain English and triggers Groq LPU acceleration.
-- **SQL Code Inspector**: Formatted SQL syntax highlighting with one-click copy and read-only verification pill.
-- **Interactive Results Table**: Displays columns and rows returned from MySQL, row count, search filter, and "Export CSV".
-- **Database Schema Drawer**: Inspect tables (`employees`, `departments`, `salaries`, `sales`), column types, primary keys, and foreign keys.
-- **Session History & Sample Queries**: Quickly re-run recent questions or trigger curated business queries.
-
----
-
-## Getting Started
-
-### 1. Start the Backend API Server
-
-In a terminal:
-
-```bash
-cd backend
-
-# Activate Python virtual environment (Windows)
-..\venv\Scripts\activate
-
-# Install dependencies (if not already installed)
-pip install -r requirements.txt
-
-# Start FastAPI server on port 8000
-python -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-```
-
-The backend API will run at `http://localhost:8000` with interactive docs at `http://localhost:8000/docs`.
-
-### 2. Start the Frontend Dev Server
-
-In a second terminal:
-
-```bash
-# In the project root (c:\Users\irfan\Downloads\plan b\DEX)
+```sh
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` in your browser.
+Copy `.env.example` to `.env.local` and set `VITE_API_BASE_URL` to the HTTP API origin. Endpoint paths can be changed with `VITE_QUERY_ENDPOINT`, `VITE_DOCUMENT_UPLOAD_ENDPOINT`, and `VITE_DOCUMENT_ASK_ENDPOINT`.
 
----
+## Existing backend status
 
-## Environment Configuration
+The repository's Python backend currently exposes module functions and a command-line runner, but no HTTP server or API routes. The frontend therefore cannot reach the existing Python functions directly. It sends requests to configurable HTTP endpoints and displays connection/API errors without supplying fake results. The default paths are `/api/query`, `/api/documents/upload`, and `/api/documents/ask`; set the environment variables to the real paths when an HTTP API is available.
 
-The frontend connects by default to `http://localhost:8000`. You can configure custom settings in `.env.local`:
+The frontend expects:
 
-```ini
-VITE_API_BASE_URL=http://localhost:8000
-```
+- `POST /api/query` with `{ "question": "..." }`. The response may include `success`, `sql`, `columns`, `rows`, `count`, `error`, and optional `execution_time`.
+- `POST /api/documents/upload` as multipart form data with a `file` field. The response should identify the document with `id` or `document_id` and may include `filename` or `name`.
+- `POST /api/documents/ask` with `{ "question": "...", "document_id": "..." }`. The response may include `answer` or `response`.
+
+The existing backend files were not changed.

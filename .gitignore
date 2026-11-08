@@ -1,3 +1,7 @@
+# Node / Frontend
+node_modules/
+dist/
+
 # Python
 venv/
 __pycache__/
@@ -7,13 +11,9 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
+dist/
 build/
 .eggs/
-
-# Node / Frontend
-node_modules/
-dist/
-.env.local
 
 # Environment
 .env
@@ -31,3 +31,4 @@ Thumbs.db
 
 # Logs
 *.log
+
