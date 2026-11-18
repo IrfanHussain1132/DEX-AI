@@ -1,7 +1,9 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  // Use relative URL so Vite proxy handles /api/* → localhost:8000
+  // Falls back to absolute only if VITE_API_BASE_URL is explicitly set (e.g. production)
+  baseURL: import.meta.env.VITE_API_BASE_URL || '',
   timeout: 120000,
 });
 

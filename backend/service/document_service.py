@@ -184,7 +184,7 @@ def find_document(identifier: Optional[str] = None) -> Optional[dict]:
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
-def _call_groq_doc_qa(system_prompt: str, user_prompt: str) -> str:
+def _call_groq_doc_qa(system_prompt: str, user_prompt: str, max_tokens: int = 500) -> str:
     """Call Groq chat completion for Document Q&A with retries."""
     if not client:
         raise ValueError("GROQ_API_KEY is not configured.")
@@ -195,8 +195,8 @@ def _call_groq_doc_qa(system_prompt: str, user_prompt: str) -> str:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.2,
-        max_tokens=2048,
+        temperature=0.1,
+        max_tokens=max_tokens,
     )
     return completion.choices[0].message.content or ""
 
@@ -233,29 +233,32 @@ def ask_document_question(question: str, document_id: Optional[str] = None) -> d
     if len(doc_text) > 150000:
         doc_text = doc_text[:150000] + "\n\n[... Remaining content truncated for length ...]"
 
-    system_prompt = """You are DEX AI Document Intelligence, an executive AI document analyst.
+    # Determine response size: factual questions → 500 tokens, summaries → 900
+    is_summary = any(w in question.lower() for w in ["summar", "overview", "describe", "explain", "tell me about", "what is"])
+    max_tok = 900 if is_summary else 500
 
-CRITICAL FORMATTING INSTRUCTIONS:
-1. Be SHORT, CONCISE, and DIRECT TO THE POINT. Eliminate unnecessary introductory or concluding filler.
-2. NEVER generate markdown tables (do NOT use | col | col | or |---|---|).
-3. NEVER output HTML tags like <br>, <b>, <span>, or <div>.
-4. Format output strictly with clean, readable bullet points (•) and short bold headers.
-5. Focus strictly on the exact question and extract the most relevant key facts, numbers, dates, or skills."""
+    system_prompt = """You are DEX AI — a precise document analyst. Answer questions about documents concisely.
 
-    user_prompt = f"""DOCUMENT: {doc_name}
+RULES (follow strictly):
+1. Answer ONLY what is asked. Do not add unrelated info.
+2. For factual questions (name, GPA, date, number): answer in 1-3 lines max.
+3. For summaries: use 4-6 bullet points max, each under 20 words.
+4. NEVER use markdown tables (no | col | syntax).
+5. NEVER use HTML tags (<br>, <b>, <div>, etc.).
+6. NEVER start with "Based on the document..." or "The document states...".
+7. Use plain bullet points (•) for lists. No nested bullets.
+8. No introductory or closing filler sentences."""
 
-CONTENT:
-\"\"\"
+    user_prompt = f"""Document: {doc_name}
+
+---
 {doc_text}
-\"\"\"
+---
 
-QUESTION:
-{question}
-
-Provide a short, clean, bulleted answer answering the question directly without markdown tables or HTML tags."""
+Question: {question}"""
 
     try:
-        raw_answer = _call_groq_doc_qa(system_prompt, user_prompt)
+        raw_answer = _call_groq_doc_qa(system_prompt, user_prompt, max_tokens=max_tok)
         elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
 
         # Sanitize any stray html tags or <br>

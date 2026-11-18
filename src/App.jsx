@@ -121,7 +121,16 @@ function Answer({ message }) {
     <div className="answer-content">
       {(result.answer || result.response) && (
         <div className="answer-text">
-          {String(result.answer || result.response).replace(/<br\s*\/?>/gi, '\n')}
+          {String(result.answer || result.response)
+            .replace(/<br\s*\/?>/gi, '\n')
+            .replace(/\|[^\n]+\|/g, '')          // strip any table rows
+            .replace(/\|-+\|/g, '')               // strip table separators
+            .split('\n')
+            .filter(line => line.trim())
+            .map((line, i) => (
+              <p key={i} style={{ margin: '3px 0', lineHeight: 1.6 }}>{line.trim()}</p>
+            ))
+          }
         </div>
       )}
 
