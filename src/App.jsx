@@ -119,8 +119,11 @@ function Answer({ message }) {
 
   return (
     <div className="answer-content">
-      {(result.answer || result.response) &&
-        <p className="answer-text">{result.answer || result.response}</p>}
+      {(result.answer || result.response) && (
+        <div className="answer-text">
+          {String(result.answer || result.response).replace(/<br\s*\/?>/gi, '\n')}
+        </div>
+      )}
 
       {sql && <SqlBlock sql={sql} />}
 

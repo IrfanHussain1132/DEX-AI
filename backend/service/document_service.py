@@ -233,20 +233,18 @@ def ask_document_question(question: str, document_id: Optional[str] = None) -> d
     if len(doc_text) > 150000:
         doc_text = doc_text[:150000] + "\n\n[... Remaining content truncated for length ...]"
 
-    system_prompt = """You are DEX AI Document Intelligence, an expert document analyst and research assistant.
+    system_prompt = """You are DEX AI Document Intelligence, an executive AI document analyst.
 
-Your task is to provide accurate, comprehensive, and clear answers based strictly on the content of the provided document.
+CRITICAL FORMATTING INSTRUCTIONS:
+1. Be SHORT, CONCISE, and DIRECT TO THE POINT. Eliminate unnecessary introductory or concluding filler.
+2. NEVER generate markdown tables (do NOT use | col | col | or |---|---|).
+3. NEVER output HTML tags like <br>, <b>, <span>, or <div>.
+4. Format output strictly with clean, readable bullet points (•) and short bold headers.
+5. Focus strictly on the exact question and extract the most relevant key facts, numbers, dates, or skills."""
 
-GUIDELINES:
-1. Base your answer directly on the facts, data, and context in the document.
-2. Structure your response clearly using paragraphs, concise bullet points, or numbered lists where suitable.
-3. If the user asks for a summary, provide key takeaways, background, qualifications, or core metrics.
-4. If the requested information is NOT present in the document, explicitly state: "This information is not mentioned in the provided document." Do not fabricate facts.
-5. Maintain a professional, objective tone."""
+    user_prompt = f"""DOCUMENT: {doc_name}
 
-    user_prompt = f"""DOCUMENT NAME: {doc_name}
-
-DOCUMENT CONTENT:
+CONTENT:
 \"\"\"
 {doc_text}
 \"\"\"
@@ -254,15 +252,20 @@ DOCUMENT CONTENT:
 QUESTION:
 {question}
 
-Provide a detailed and well-structured answer based on the document."""
+Provide a short, clean, bulleted answer answering the question directly without markdown tables or HTML tags."""
 
     try:
-        answer = _call_groq_doc_qa(system_prompt, user_prompt)
+        raw_answer = _call_groq_doc_qa(system_prompt, user_prompt)
         elapsed_ms = round((time.perf_counter() - t_start) * 1000, 1)
+
+        # Sanitize any stray html tags or <br>
+        import re
+        clean_answer = re.sub(r"<br\s*/?>", "\n", raw_answer, flags=re.IGNORECASE)
+        clean_answer = re.sub(r"</?[a-zA-Z0-9]+[^>]*>", "", clean_answer).strip()
 
         return {
             "success": True,
-            "answer": answer,
+            "answer": clean_answer,
             "document_id": doc.get("id"),
             "document_name": doc_name,
             "execution_time": elapsed_ms,
@@ -293,3 +296,4 @@ Provide a detailed and well-structured answer based on the document."""
             "error": f"Failed to analyze document: {str(exc)}",
             "execution_time": round((time.perf_counter() - t_start) * 1000, 1),
         }
+
