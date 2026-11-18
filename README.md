@@ -1,162 +1,111 @@
-# DEX-AI — Agentic Text-to-SQL Application
+# DEX AI — Enterprise Intelligence
 
-A production-ready **Natural Language → MySQL** pipeline powered by the **Groq API** (free tier) and `meta-llama/llama-4-scout-17b-16e-instruct`.
-
----
-
-## Architecture
-
-```
-User Question
-     │
-     ▼
-┌──────────────────────────┐
-│   sql_generator.py       │  ← Groq LLM (Llama 4 Scout, free tier)
-│   (agents/)              │    + retry / exponential back-off
-│   • prompt engineering   │    + read-only enforcement
-│   • SQL safety checks    │    + sqlglot syntax validation
-└────────────┬─────────────┘
-             │  validated SELECT
-             ▼
-┌──────────────────────────┐
-│   query_executor.py      │  ← SQLAlchemy + MySQL
-│   (service/)             │    + secondary read-only guard
-│   • safe execution       │    + serialisable output
-└──────────────────────────┘
-             │  rows / error
-             ▼
-         Response
-```
+> **Agentic Text-to-SQL + Document Intelligence** powered by Groq LLM, FastAPI, MySQL, and React.
 
 ---
 
-## Free LLM Provider Comparison
+## Stack
 
-| Provider | Model | Free Tier | Context | Tool Calling | SQL Quality |
-|----------|-------|-----------|---------|--------------|-------------|
-| **Groq** ✅ | `meta-llama/llama-4-scout-17b-16e-instruct` | ✅ Yes (no CC) | 128 K | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Groq | `llama-3.1-8b-instant` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐ |
-| Groq | `openai/gpt-oss-120b` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Google Gemini | `gemini-2.0-flash` | ✅ Yes (AI Studio) | 1 M | ✅ Yes | ⭐⭐⭐⭐⭐ |
-| Cerebras | `llama-3.3-70b` | ✅ Yes | 128 K | ✅ Yes | ⭐⭐⭐⭐ |
-| SambaNova | `Meta-Llama-3.1-405B` | ✅ Yes | 16 K | ⚠️ Partial | ⭐⭐⭐ |
-| NVIDIA NIM | various | ✅ 1 K credits | varies | ✅ Yes | ⭐⭐⭐⭐ |
-| OpenRouter | various | ✅ \$1 free credits | varies | ✅ Yes | varies |
-| Hugging Face | serverless inference | ✅ Limited | varies | ⚠️ Model-dependent | ⭐⭐⭐ |
-
-> **Selected: Groq + Llama 4 Scout** — best combination of free access, speed (LPU), tool-calling, and SQL accuracy.
+| Layer | Tech |
+|---|---|
+| Frontend | React 18 + Vite + Lucide Icons |
+| Backend | FastAPI + Uvicorn |
+| Database | MySQL (`company_analytics`) |
+| LLM | Groq API (`openai/gpt-oss-120b`) |
+| PDF Parsing | pypdf |
 
 ---
 
-## Why `llama-3.3-70b-versatile` Stopped Working
+## Local Development
 
-Groq deprecated `llama-3.3-70b-versatile` on the free developer tier, effective **16 August 2026**.  
-Any request to that model ID now returns:
-
-```
-Error code: 404 — model_not_found
-```
-
-**Fix:** Update `GROQ_MODEL` in `.env` to a currently active model.
-
----
-
-## Quick Start
-
-### 1. Prerequisites
-- Python 3.10+
-- MySQL 8.0 running locally
-- Groq API key (free at [console.groq.com](https://console.groq.com))
-
-### 2. Clone & Set Up
-
-```bash
-git clone https://github.com/IrfanHussain1132/DEX-AI.git
-cd DEX-AI/backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 3. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env with your MySQL credentials and Groq API key
-```
-
-### 4. Run
-
+### 1. Backend
 ```bash
 cd backend
-python main.py
+python -m venv venv
+venv\Scripts\activate          # Windows
+pip install -r requirements.txt
+cp .env.example .env           # fill in your values
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 2. Frontend
+```bash
+npm install
+npm run dev
+# → http://localhost:5173
 ```
 
 ---
 
-## Project Structure
+## Environment Variables (backend/.env)
 
-```
-DEX/
-└── backend/
-    ├── agents/
-    │   ├── __init__.py
-    │   └── sql_generator.py      ← LLM integration (Groq, retries, safety)
-    ├── service/
-    │   ├── __init__.py
-    │   └── query_executor.py     ← Safe MySQL execution layer
-    ├── connection.py             ← SQLAlchemy engine
-    ├── schema.py                 ← Dynamic schema introspection
-    ├── main.py                   ← App entry point + acceptance tests
-    ├── test_connection.py        ← DB connectivity test
-    ├── test_sql_generation.py    ← SQL generation smoke tests
-    ├── requirements.txt
-    ├── .env.example
-    └── .gitignore
+```env
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=root
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=company_analytics
+
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=openai/gpt-oss-120b
+
+ALLOWED_ORIGINS=http://localhost:5173
 ```
 
 ---
 
-## Security Features
+## Deployment
 
-| Feature | Implementation |
-|---------|---------------|
-| Read-only enforcement | Regex guard + `SELECT`-only check in both generator and executor |
-| SQL injection protection | No string interpolation; SQLAlchemy `text()` with parameterisation |
-| Syntax validation | `sqlglot` parse check before execution |
-| API key security | Environment variables only — never hardcoded |
-| Rate-limit handling | `tenacity` exponential back-off (2 s → 4 s → 8 s → 60 s) |
+### Recommended Stack
+
+| Service | What deploys there | Free tier |
+|---|---|---|
+| **Railway** | FastAPI backend | ✅ 500 hrs/month |
+| **Vercel** | React frontend | ✅ Unlimited |
+| **PlanetScale / Aiven** | MySQL database | ✅ Free hobby tier |
+
+### Deploy Backend → Railway
+
+1. Go to [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
+2. Select this repo → set **Root Directory** to `backend`
+3. Railway auto-detects the `Dockerfile` and builds it
+4. Add environment variables in Railway dashboard (all from `.env.example`)
+5. Copy the generated Railway URL (e.g. `https://dex-ai-backend.up.railway.app`)
+
+### Deploy Frontend → Vercel
+
+1. Go to [vercel.com](https://vercel.com) → **New Project** → import this repo
+2. Set **Framework Preset** = `Vite`
+3. Add environment variable:
+   ```
+   VITE_API_BASE_URL = https://dex-ai-backend.up.railway.app
+   ```
+4. Click Deploy → get your Vercel URL
+
+### After both are deployed
+
+Go back to Railway → add one more env var:
+```
+ALLOWED_ORIGINS = https://your-app.vercel.app
+```
+
+Then redeploy Railway backend.
+
+### MySQL in Production
+
+Use a hosted MySQL — free options:
+- **[Aiven](https://aiven.io)** — free 1-month trial, then \$19/mo
+- **[Railway MySQL plugin](https://railway.app)** — add MySQL service inside Railway project ✅ easiest
+- **[PlanetScale](https://planetscale.com)** — MySQL-compatible, free hobby tier
 
 ---
 
-## Environment Variables
+## API Endpoints
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GROQ_API_KEY` | Groq API key | **required** |
-| `GROQ_MODEL` | Model ID | `meta-llama/llama-4-scout-17b-16e-instruct` |
-| `MYSQL_HOST` | MySQL host | `localhost` |
-| `MYSQL_PORT` | MySQL port | `3306` |
-| `MYSQL_USER` | MySQL user | — |
-| `MYSQL_PASSWORD` | MySQL password | — |
-| `MYSQL_DATABASE` | Database name | — |
-
----
-
-## Phase 4 Test Queries
-
-| # | Natural Language | Expected |
-|---|-----------------|----------|
-| 1 | Show all employees | SELECT * FROM employees |
-| 2 | Average salary per department | GROUP BY + AVG |
-| 3 | Department with highest avg salary | ORDER BY + LIMIT 1 |
-| 4 | Employees earning > 50 000 | WHERE salary > 50000 |
-| 5 | Count employees per department | COUNT + GROUP BY |
-| 6 | Top 5 highest-paid employees | ORDER BY salary DESC LIMIT 5 |
-
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/health` | DB + LLM status |
+| GET | `/api/schema` | Live MySQL schema |
+| POST | `/api/query` | Natural language → SQL → results |
+| POST | `/api/documents/upload` | Upload PDF |
+| POST | `/api/documents/ask` | Ask question about PDF |

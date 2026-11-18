@@ -11,17 +11,18 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
-dist/
 build/
 .eggs/
 
-# Uploads & Temp Data
+# Uploads & user data (never commit)
 backend/uploads/
 uploads/
+*.pdf
 
-# Environment
+# Environment — NEVER commit real .env
 .env
 *.env.local
+backend/.env
 
 # IDE
 .vscode/
@@ -35,4 +36,3 @@ Thumbs.db
 
 # Logs
 *.log
-
