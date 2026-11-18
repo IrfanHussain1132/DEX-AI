@@ -30,10 +30,9 @@ logger = logging.getLogger("dex_document_service")
 load_dotenv()
 
 API_KEY = os.getenv("GROQ_API_KEY")
-MODEL = os.getenv("GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+# NOTE: MODEL is read dynamically per-call (not cached) so .env changes take effect on reload
 
 client = Groq(api_key=API_KEY) if API_KEY else None
-
 # Upload directory inside backend
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -189,8 +188,11 @@ def _call_groq_doc_qa(system_prompt: str, user_prompt: str, max_tokens: int = 50
     if not client:
         raise ValueError("GROQ_API_KEY is not configured.")
 
+    # Read model dynamically so .env changes are picked up on reload
+    model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
     completion = client.chat.completions.create(
-        model=MODEL,
+        model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
