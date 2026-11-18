@@ -8,10 +8,16 @@ import {
 import { askDatabase, askDocument, readableApiError, uploadDocument } from './services/api';
 
 /* ─── Suggestion prompts ──────────────────────────────────────────────────── */
-const SUGGESTIONS = [
+const DB_SUGGESTIONS = [
   { icon: BarChart3, title: 'Average salary by department',   prompt: 'Show average salary by department.' },
   { icon: Activity,  title: 'Top 5 highest-paid employees',   prompt: 'Find the top 5 highest-paid employees.' },
   { icon: Database,  title: 'Count employees per department',  prompt: 'Count employees in each department.' },
+];
+
+const DOC_SUGGESTIONS = [
+  { icon: FileText,  title: 'Summarize candidate / document', prompt: 'Summarize the candidate’s overall profile, skills, and background.' },
+  { icon: Sparkles,  title: 'Key skills & qualifications',    prompt: 'What are the main skills, education, and qualifications mentioned?' },
+  { icon: Activity,  title: 'Experience & achievements',      prompt: 'Explain the work history, project roles, and key accomplishments.' },
 ];
 
 /* ─── Response field helpers ──────────────────────────────────────────────── */
@@ -125,6 +131,13 @@ function Answer({ message }) {
         </div>
       )}
 
+      {!sql && (result.answer || result.response) && (
+        <div className="query-meta">
+          <span><span className="status-dot" /> Document analyzed {result.document_name ? `· ${result.document_name}` : ''}</span>
+          {ms != null && <span><Clock3 size={13} />{typeof ms === 'number' ? `${ms} ms` : ms}</span>}
+        </div>
+      )}
+
       {Array.isArray(rows) && (sql || rows.length > 0) &&
         <ResultsTable rows={rows} columns={columns} count={result.count ?? rows.length} />}
 
@@ -148,14 +161,14 @@ function DbStatus() {
   }, []);
 
   if (state === 'checking')
-    return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9 }}><LoaderCircle size={11} className="spin" /> Connecting…</span>;
+    return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10 }}><LoaderCircle size={12} className="spin" /> Connecting…</span>;
 
   if (state === 'error')
-    return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, color: '#ff7272' }}><WifiOff size={11} /> DB offline</span>;
+    return <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#ff7272' }}><WifiOff size={12} /> DB offline</span>;
 
   return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 9, color: '#57d29a' }}>
-      <Wifi size={11} /> {info?.database?.name || 'MySQL'} · {info?.database?.table_count ?? '?'} tables
+    <span style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#57d29a' }}>
+      <Wifi size={12} /> {info?.database?.name || 'MySQL'} · {info?.database?.table_count ?? '?'} tables
     </span>
   );
 }
@@ -166,7 +179,7 @@ function Composer({ input, setInput, onSubmit, busy, mode, activeDoc, onAttach, 
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSubmit(); }
   }
   const placeholder = mode === 'documents'
-    ? (mini ? 'Ask a follow-up about your documents…' : 'Ask about your documents…')
+    ? (mini ? 'Ask a follow-up about your documents…' : activeDoc ? `Ask a question about ${activeDoc.name}…` : 'Ask a question about your uploaded PDF…')
     : (mini ? 'Ask a follow-up question…' : 'Ask anything about your data…');
 
   return (
@@ -177,16 +190,16 @@ function Composer({ input, setInput, onSubmit, busy, mode, activeDoc, onAttach, 
         onChange={e => setInput(e.target.value)}
         onKeyDown={handleKey}
         placeholder={placeholder}
-        style={mini ? { minHeight: 48, maxHeight: 150, paddingTop: 14 } : {}}
+        style={mini ? { minHeight: 52, maxHeight: 160, paddingTop: 15 } : {}}
       />
       <div className="composer-footer">
         <button className="attach-btn" onClick={onAttach} title="Upload PDF">
-          <Paperclip size={mini ? 15 : 16} /><span>Attach</span>
+          <Paperclip size={mini ? 16 : 17} /><span>Attach PDF</span>
         </button>
         <div className="composer-right">
           <span className="mode-chip">
-            <Database size={13} />
-            {mode === 'database' ? 'Database' : activeDoc?.name || 'Documents'}
+            {mode === 'database' ? <Database size={14} /> : <FileText size={14} />}
+            {mode === 'database' ? 'Database' : (activeDoc?.name || 'Document AI')}
           </span>
           <button
             className="send-button"
@@ -222,8 +235,8 @@ export default function App() {
   }, [messages]);
 
   function newChat() {
-    setMessages([]); setInput(''); setMode('database');
-    setActiveDoc(null); setSidebarOpen(false);
+    setMessages([]); setInput('');
+    setSidebarOpen(false);
   }
 
   async function submit(question, selectedMode) {
@@ -238,7 +251,7 @@ export default function App() {
 
     try {
       const result = m === 'documents'
-        ? await askDocument(q, activeDoc?.id || activeDoc?.name)
+        ? await askDocument(q, activeDoc?.id || activeDoc?.document_id || activeDoc?.name)
         : await askDatabase(q);
       setMessages(prev => prev.map(msg => msg.id === id ? { ...msg, pending: false, result } : msg));
     } catch (err) {
@@ -258,6 +271,7 @@ export default function App() {
         const doc  = { ...data, id: data.id || data.document_id || entry.id, name: data.filename || data.name || file.name, status: 'Ready' };
         setDocuments(prev => prev.map(d => d.id === entry.id ? doc : d));
         setActiveDoc(doc);
+        setMode('documents');
       } catch (err) {
         setDocuments(prev => prev.map(d => d.id === entry.id ? { ...d, status: 'Failed', error: readableApiError(err) } : d));
       }
@@ -266,6 +280,7 @@ export default function App() {
 
   /* shared composer props */
   const composerProps = { input, setInput, busy, mode, activeDoc, onAttach: () => fileRef.current?.click() };
+  const currentSuggestions = mode === 'documents' ? DOC_SUGGESTIONS : DB_SUGGESTIONS;
 
   return (
     <div className="app-shell">
@@ -319,13 +334,13 @@ export default function App() {
                   <i className={`doc-status ${doc.status === 'Ready' ? 'ready' : doc.status === 'Failed' ? 'failed' : ''}`} />
                 </button>
               ))
-            : <div className="history-empty">No PDFs uploaded yet.</div>}
+            : <div className="history-empty">No PDFs uploaded yet. Click + to add one.</div>}
         </div>
 
         <div className="sidebar-bottom">
           <div className="plan-card">
             <div className="plan-icon"><Zap size={15} /></div>
-            <div><b>DEX AI Workspace</b><span>Groq · Llama 4 Scout</span></div>
+            <div><b>DEX AI Workspace</b><span>Groq · Document & SQL AI</span></div>
             <span className="connected-pill">LIVE</span>
           </div>
           <button className="nav-item settings-item"><Settings2 size={16} />Settings</button>
@@ -375,17 +390,23 @@ export default function App() {
                   <Sparkles size={25} />
                 </div>
                 <h1>Welcome to <span>DEX AI.</span></h1>
-                <p className="welcome-subtitle">What would you like to know about your business?</p>
+                <p className="welcome-subtitle">
+                  {mode === 'documents'
+                    ? (activeDoc ? `Active Document: ${activeDoc.name} — Ask any question below.` : 'Upload a PDF to ask questions, summarize, and extract insights.')
+                    : 'What would you like to know about your business database?'}
+                </p>
 
                 <Composer {...composerProps} onSubmit={() => submit()} />
 
-                <div className="suggestion-label">GET STARTED WITH A QUESTION</div>
+                <div className="suggestion-label">
+                  {mode === 'documents' ? 'SUGGESTED DOCUMENT QUESTIONS' : 'GET STARTED WITH A QUESTION'}
+                </div>
                 <div className="suggestions">
-                  {SUGGESTIONS.map(({ icon: Icon, title, prompt }) => (
+                  {currentSuggestions.map(({ icon: Icon, title, prompt }) => (
                     <button
                       key={title}
                       className="suggestion-card"
-                      onClick={() => { setMode('database'); submit(prompt, 'database'); }}
+                      onClick={() => { submit(prompt, mode); }}
                     >
                       <span className="suggestion-icon"><Icon size={16} /></span>
                       <span>{title}</span>
@@ -435,7 +456,7 @@ export default function App() {
                       {msg.pending
                         ? <div className="loading-state">
                             <LoaderCircle size={16} className="spin" />
-                            Analyzing your question
+                            {msg.mode === 'documents' ? 'Analyzing document with AI' : 'Analyzing your question'}
                             <span className="loading-dots">•••</span>
                           </div>
                         : <Answer message={msg} />}

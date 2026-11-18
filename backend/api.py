@@ -22,7 +22,7 @@ import time
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -34,17 +34,19 @@ load_dotenv()
 
 # ── local imports ────────────────────────────────────────────────────────────
 try:
-    from agents.sql_generator   import generate_sql
-    from service.query_executor import execute_query
-    from connection             import engine
-    from schema                 import get_database_schema
+    from agents.sql_generator       import generate_sql
+    from service.query_executor     import execute_query
+    from service.document_service   import save_and_process_document, ask_document_question
+    from connection                 import engine
+    from schema                     import get_database_schema
 except ImportError:
     import sys
     sys.path.insert(0, os.path.dirname(__file__))
-    from agents.sql_generator   import generate_sql
-    from service.query_executor import execute_query
-    from connection             import engine
-    from schema                 import get_database_schema
+    from agents.sql_generator       import generate_sql
+    from service.query_executor     import execute_query
+    from service.document_service   import save_and_process_document, ask_document_question
+    from connection                 import engine
+    from schema                     import get_database_schema
 
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -211,52 +213,66 @@ async def get_schema():
 
 
 # ── Document endpoints ────────────────────────────────────────────────────────
-# These stubs return a clear, friendly message so the frontend shows an
-# informative error instead of a raw 404.  Replace with real PDF/RAG logic
-# (e.g. LangChain + ChromaDB) when you add document intelligence.
-
 class DocumentAskRequest(BaseModel):
     question: str = Field(..., min_length=1)
     document_id: Optional[str] = None
 
 
 @app.post("/api/documents/upload")
-async def upload_document(request: Request):
+async def upload_document(file: UploadFile = File(...)):
     """
-    Document upload endpoint.
-    Currently not implemented — returns a helpful 501 response.
+    Upload and parse a PDF document for Document Intelligence.
+    Extracts text, creates index, and readies document for Q&A.
     """
-    logger.info("Document upload attempted — feature not yet configured.")
-    return JSONResponse(
-        status_code=501,
-        content={
-            "success": False,
-            "error": (
-                "Document Intelligence is not yet configured. "
-                "This feature requires a PDF parser and a vector store (e.g. ChromaDB). "
-                "Switch to 'Database query' mode to query your MySQL data."
-            ),
-        },
-    )
+    logger.info("Received document upload: %s", file.filename)
+
+    if not file.filename.lower().endswith(".pdf"):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "Only PDF files (.pdf) are currently supported."},
+        )
+
+    try:
+        content = await file.read()
+        if not content:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "The uploaded file is empty."},
+            )
+
+        doc_info = save_and_process_document(content, file.filename)
+        return doc_info
+
+    except Exception as exc:
+        logger.exception("Error processing document upload: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"Failed to process document: {str(exc)}"},
+        )
 
 
 @app.post("/api/documents/ask")
 async def ask_document(body: DocumentAskRequest):
     """
-    Document Q&A endpoint.
-    Currently not implemented — returns a helpful 501 response.
+    Natural-language question answering against uploaded documents.
     """
-    logger.info("Document ask attempted — feature not yet configured.")
-    return JSONResponse(
-        status_code=501,
-        content={
-            "success": False,
-            "error": (
-                "Document Intelligence is not yet configured. "
-                "Switch to 'Database query' mode to query your MySQL data with natural language."
-            ),
-        },
-    )
+    logger.info("Document question received: '%s' (doc_id: %s)", body.question, body.document_id)
+
+    try:
+        result = ask_document_question(body.question, body.document_id)
+        if not result["success"]:
+            return JSONResponse(
+                status_code=400 if "No document found" in (result.get("error") or "") else 500,
+                content=result,
+            )
+        return result
+
+    except Exception as exc:
+        logger.exception("Error answering document question: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"Document QA failed: {str(exc)}"},
+        )
 
 
 # ── Dev entry-point ───────────────────────────────────────────────────────────

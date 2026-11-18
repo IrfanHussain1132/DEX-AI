@@ -15,6 +15,10 @@ dist/
 build/
 .eggs/
 
+# Uploads & Temp Data
+backend/uploads/
+uploads/
+
 # Environment
 .env
 *.env.local
